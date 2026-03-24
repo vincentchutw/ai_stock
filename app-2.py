@@ -1,0 +1,448 @@
+"""
+【Code Gym】AI 股票趨勢分析系統 v2
+使用 Flask 框架，可部署到 Cloudflare Pages（靜態模式）或作為 Flask server 執行
+執行方式: python app-2.py
+"""
+
+from flask import Flask, render_template_string
+
+app = Flask(__name__)
+
+HTML = """<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 股票趨勢分析系統</title>
+<script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0f1117;
+    --sidebar-bg: #1a1d27;
+    --card-bg: #1e2130;
+    --border: #2d3149;
+    --accent: #667eea;
+    --accent2: #764ba2;
+    --green: #26a69a;
+    --red: #ef5350;
+    --text: #e0e0e0;
+    --muted: #8b8fa8;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; }
+
+  /* ── Top bar ── */
+  .topbar {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    padding: 14px 28px;
+    display: flex; align-items: center; gap: 12px;
+    box-shadow: 0 2px 20px rgba(102,126,234,.4);
+  }
+  .topbar h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: .5px; }
+  .rainbow-line {
+    height: 3px;
+    background: linear-gradient(90deg,#ff6b6b,#ffd700,#74c0fc,#b197fc,#69db7c,#ff8c94);
+  }
+
+  /* ── Layout ── */
+  .layout { display: flex; flex: 1; overflow: hidden; }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    width: 300px; min-width: 260px;
+    background: var(--sidebar-bg);
+    border-right: 1px solid var(--border);
+    padding: 20px 16px;
+    display: flex; flex-direction: column; gap: 14px;
+    overflow-y: auto;
+  }
+  .sidebar h2 { font-size: .85rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+  label { font-size: .82rem; color: var(--muted); display: block; margin-bottom: 4px; }
+  input[type=text], input[type=password], input[type=date] {
+    width: 100%; padding: 9px 12px;
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: .88rem;
+    outline: none; transition: border .2s;
+  }
+  input:focus { border-color: var(--accent); }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .btn-run {
+    width: 100%; padding: 11px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border: none; border-radius: 8px; color: #fff;
+    font-size: .95rem; font-weight: 600; cursor: pointer;
+    transition: opacity .2s, transform .1s;
+  }
+  .btn-run:hover { opacity: .9; transform: translateY(-1px); }
+  .btn-run:active { transform: translateY(0); }
+  .disclaimer {
+    font-size: .74rem; color: var(--muted); line-height: 1.6;
+    background: rgba(239,83,80,.07); border: 1px solid rgba(239,83,80,.2);
+    border-radius: 8px; padding: 10px 12px; margin-top: auto;
+  }
+  .disclaimer strong { color: #ef5350; }
+
+  /* ── Main ── */
+  .main { flex: 1; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px;
+  }
+  .card-title {
+    font-size: .95rem; font-weight: 600; margin-bottom: 14px;
+    display: flex; align-items: center; gap: 8px;
+  }
+
+  /* ── Metrics ── */
+  .metrics { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; }
+  .metric {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .metric-label { font-size: .75rem; color: var(--muted); margin-bottom: 6px; }
+  .metric-value { font-size: 1.4rem; font-weight: 700; }
+  .metric-delta { font-size: .8rem; margin-top: 4px; }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+
+  /* ── AI Output ── */
+  #ai-output {
+    line-height: 1.8; font-size: .88rem; white-space: pre-wrap;
+    max-height: 520px; overflow-y: auto;
+    background: var(--bg); border-radius: 8px; padding: 16px;
+    border: 1px solid var(--border);
+  }
+
+  /* ── Table ── */
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  th { background: var(--bg); color: var(--muted); padding: 8px 12px; text-align: right; font-weight: 500; border-bottom: 1px solid var(--border); }
+  th:first-child { text-align: left; }
+  td { padding: 8px 12px; text-align: right; border-bottom: 1px solid rgba(45,49,73,.5); }
+  td:first-child { text-align: left; font-weight: 500; }
+  tr:hover td { background: rgba(102,126,234,.06); }
+
+  /* ── Alert ── */
+  .alert { border-radius: 8px; padding: 10px 14px; font-size: .84rem; margin-bottom: 4px; }
+  .alert-error { background: rgba(239,83,80,.12); border: 1px solid rgba(239,83,80,.3); color: #ef9a9a; }
+  .alert-info { background: rgba(102,126,234,.12); border: 1px solid rgba(102,126,234,.3); color: #a5b4fc; }
+  .alert-success { background: rgba(38,166,154,.12); border: 1px solid rgba(38,166,154,.3); color: #80cbc4; }
+
+  /* ── Spinner ── */
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Welcome ── */
+  .welcome { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .welcome .icon { font-size: 3.5rem; margin-bottom: 16px; }
+  .welcome h2 { font-size: 1.1rem; color: var(--text); margin-bottom: 8px; }
+
+  /* Legend tips */
+  .ma-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+  .ma-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+  .ma-item { font-size: .78rem; color: var(--muted); display: flex; align-items: center; }
+
+  #messages { display: flex; flex-direction: column; gap: 6px; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <span style="font-size:1.6rem">📈</span>
+  <h1>AI 股票趨勢分析系統</h1>
+</div>
+<div class="rainbow-line"></div>
+
+<div class="layout">
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar">
+    <div>
+      <h2>⚙️ 分析設定</h2>
+      <div class="rainbow-line" style="border-radius:2px;margin:6px 0 14px"></div>
+    </div>
+
+    <div>
+      <label>📌 股票代碼</label>
+      <input type="text" id="symbol" value="AAPL" placeholder="e.g. AAPL, MSFT, GOOGL">
+    </div>
+    <div>
+      <label>🔑 FMP API Key</label>
+      <input type="password" id="fmpKey" placeholder="Financial Modeling Prep API Key">
+    </div>
+    <div>
+      <label>🤖 OpenAI API Key</label>
+      <input type="password" id="openaiKey" placeholder="OpenAI API Key">
+    </div>
+    <div>
+      <label>📅 起始日期</label>
+      <input type="date" id="startDate">
+    </div>
+    <div>
+      <label>📅 結束日期</label>
+      <input type="date" id="endDate">
+    </div>
+
+    <button class="btn-run" onclick="runAnalysis()">🚀 分析</button>
+
+    <div class="disclaimer">
+      <strong>📢 免責聲明</strong><br>
+      本系統僅供學術研究與教育用途，AI 提供的分析結果僅供參考，<strong>不構成投資建議</strong>。請自行判斷投資決策並承擔相關風險。
+    </div>
+  </aside>
+
+  <!-- ── Main ── -->
+  <main class="main" id="mainArea">
+    <!-- 歡迎畫面 -->
+    <div class="welcome" id="welcome">
+      <div class="icon">📊</div>
+      <h2>請在左側填入設定並點擊「分析」</h2>
+      <p style="font-size:.85rem;margin-top:8px">支援美股：AAPL · MSFT · GOOGL · TSLA · NVDA</p>
+
+      <div style="margin-top:32px;text-align:left;max-width:520px;margin-left:auto;margin-right:auto">
+        <table>
+          <thead><tr><th style="text-align:left">指標</th><th style="text-align:left">說明</th></tr></thead>
+          <tbody>
+            <tr><td>K 線圖</td><td>每日開高低收，綠漲紅跌</td></tr>
+            <tr><td>MA5</td><td>5 日移動平均線（短期）</td></tr>
+            <tr><td>MA10</td><td>10 日移動平均線</td></tr>
+            <tr><td>MA20</td><td>20 日月線（中期）</td></tr>
+            <tr><td>MA60</td><td>60 日季線（長期）</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 動態內容區 -->
+    <div id="messages"></div>
+    <div id="chartCard" class="card" style="display:none">
+      <div class="card-title">📊 股價 K 線圖與技術指標</div>
+      <div id="chart"></div>
+    </div>
+    <div id="metricsCard" class="card" style="display:none">
+      <div class="card-title">📋 基本統計資訊</div>
+      <div class="metrics" id="metricsRow"></div>
+    </div>
+    <div id="aiCard" class="card" style="display:none">
+      <div class="card-title">🤖 AI 技術分析</div>
+      <div id="ai-output">等待分析中...</div>
+    </div>
+    <div id="tableCard" class="card" style="display:none">
+      <div class="card-title">📁 歷史數據表格（最近 10 個交易日）</div>
+      <div class="tbl-wrap"><table id="dataTable"></table></div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ── 預設日期 ──
+const today = new Date();
+const d90 = new Date(); d90.setDate(today.getDate() - 90);
+document.getElementById('endDate').value = today.toISOString().split('T')[0];
+document.getElementById('startDate').value = d90.toISOString().split('T')[0];
+
+function fmt(n){ return n!==null&&n!==undefined ? '$'+Number(n).toFixed(2) : '-'; }
+function fmtVol(n){ return n ? Number(n).toLocaleString() : '-'; }
+function showMsg(html){ document.getElementById('messages').innerHTML = html; }
+
+// ── MA 計算 ──
+function rollingMean(arr, w){
+  return arr.map((_, i) => {
+    const slice = arr.slice(Math.max(0, i-w+1), i+1);
+    return slice.reduce((a,b)=>a+b,0)/slice.length;
+  });
+}
+
+async function runAnalysis(){
+  const symbol = document.getElementById('symbol').value.trim().toUpperCase();
+  const fmpKey = document.getElementById('fmpKey').value.trim();
+  const openaiKey = document.getElementById('openaiKey').value.trim();
+  const startDate = document.getElementById('startDate').value;
+  const endDate = document.getElementById('endDate').value;
+
+  // ── 驗證 ──
+  if(!symbol){ showMsg('<div class="alert alert-error">❌ 請輸入股票代碼</div>'); return; }
+  if(!fmpKey){ showMsg('<div class="alert alert-error">❌ 請輸入 FMP API Key</div>'); return; }
+  if(!openaiKey){ showMsg('<div class="alert alert-error">❌ 請輸入 OpenAI API Key</div>'); return; }
+  if(startDate > endDate){ showMsg('<div class="alert alert-error">❌ 起始日期不能晚於結束日期</div>'); return; }
+
+  document.getElementById('welcome').style.display = 'none';
+  ['chartCard','metricsCard','aiCard','tableCard'].forEach(id=>document.getElementById(id).style.display='none');
+  showMsg('<div class="alert alert-info"><span class="spinner"></span>正在從 FMP 獲取 <b>'+symbol+'</b> 歷史數據...</div>');
+
+  // ── FMP API ──
+  let records;
+  try {
+    const url = `https://financialmodelingprep.com/stable/historical-price-eod/full?symbol=${symbol}&apikey=${fmpKey}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if(Array.isArray(data)) records = data;
+    else if(data.historical) records = data.historical;
+    else { showMsg('<div class="alert alert-error">❌ 找不到 <b>'+symbol+'</b> 的數據，請確認股票代號（例：AAPL, MSFT, GOOGL）</div>'); return; }
+  } catch(e) {
+    showMsg('<div class="alert alert-error">❌ FMP API 連線錯誤：'+e.message+'</div>'); return;
+  }
+
+  if(!records || records.length === 0){
+    showMsg('<div class="alert alert-error">❌ 沒有可用的歷史數據</div>'); return;
+  }
+
+  // ── 日期過濾 & 排序 ──
+  let df = records
+    .map(r=>({ date: r.date, open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume }))
+    .filter(r => r.date >= startDate && r.date <= endDate)
+    .sort((a,b) => a.date > b.date ? 1 : -1);
+
+  if(df.length === 0){
+    showMsg('<div class="alert alert-error">❌ 在 '+startDate+' ~ '+endDate+' 期間找不到數據，請調整日期範圍</div>'); return;
+  }
+
+  // ── 計算 MA ──
+  const closes = df.map(r=>r.close);
+  const ma5  = rollingMean(closes, 5);
+  const ma10 = rollingMean(closes, 10);
+  const ma20 = rollingMean(closes, 20);
+  const ma60 = rollingMean(closes, 60);
+  df = df.map((r,i)=>({...r, ma5:ma5[i], ma10:ma10[i], ma20:ma20[i], ma60:ma60[i]}));
+
+  showMsg('<div class="alert alert-success">✅ 成功取得 '+df.length+' 個交易日數據，已計算 MA5/MA10/MA20/MA60</div>');
+
+  // ── 畫圖 ──
+  const dates = df.map(r=>r.date);
+  const barColors = df.map(r=> r.close >= r.open ? '#26a69a' : '#ef5350');
+
+  const candlestick = {
+    type: 'candlestick', x: dates,
+    open: df.map(r=>r.open), high: df.map(r=>r.high),
+    low: df.map(r=>r.low), close: df.map(r=>r.close),
+    name: 'K線',
+    increasing: { line: { color: '#26a69a' } },
+    decreasing: { line: { color: '#ef5350' } },
+    xaxis: 'x', yaxis: 'y'
+  };
+  const maTraces = [
+    { y: df.map(r=>r.ma5),  name:'MA5',  line:{color:'#FFD700',width:1.5} },
+    { y: df.map(r=>r.ma10), name:'MA10', line:{color:'#FF6B6B',width:1.5} },
+    { y: df.map(r=>r.ma20), name:'MA20', line:{color:'#74C0FC',width:1.8} },
+    { y: df.map(r=>r.ma60), name:'MA60', line:{color:'#B197FC',width:2  } },
+  ].map(t=>({type:'scatter', x:dates, xaxis:'x', yaxis:'y', mode:'lines', ...t}));
+  const volume = {
+    type:'bar', x:dates, y:df.map(r=>r.volume),
+    name:'成交量', marker:{color:barColors, opacity:0.7},
+    xaxis:'x', yaxis:'y2'
+  };
+
+  const layout = {
+    template: 'plotly_dark',
+    paper_bgcolor: '#1e2130', plot_bgcolor: '#1e2130',
+    height: 580,
+    title: { text: `${symbol} 股價 K 線圖（${startDate} ~ ${endDate}）`, font:{size:13}, x:0.5 },
+    legend: { orientation:'h', y:1.04, x:0.5, xanchor:'center' },
+    xaxis: { rangeslider:{visible:false}, showgrid:true, gridcolor:'rgba(255,255,255,0.06)' },
+    yaxis: { domain:[0.25,1], showgrid:true, gridcolor:'rgba(255,255,255,0.06)' },
+    yaxis2: { domain:[0,0.22], showgrid:false },
+    margin: { l:50, r:20, t:60, b:40 },
+    hovermode: 'x unified'
+  };
+
+  document.getElementById('chartCard').style.display = 'block';
+  Plotly.newPlot('chart', [candlestick, ...maTraces, volume], layout, {responsive:true, displayModeBar:false});
+
+  // ── 統計資訊 ──
+  const sp = df[0].close, ep = df[df.length-1].close;
+  const pct = ((ep-sp)/sp*100), diff = ep-sp;
+  const posNeg = pct >= 0 ? 'pos' : 'neg';
+  const arrow = pct >= 0 ? '▲' : '▼';
+  document.getElementById('metricsRow').innerHTML = `
+    <div class="metric">
+      <div class="metric-label">起始價格（${df[0].date}）</div>
+      <div class="metric-value">${fmt(sp)}</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">結束價格（${df[df.length-1].date}）</div>
+      <div class="metric-value">${fmt(ep)}</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">期間漲跌幅</div>
+      <div class="metric-value class="${posNeg}">${pct>=0?'+':''}${pct.toFixed(2)}%</div>
+      <div class="metric-delta ${posNeg}">${arrow} ${diff>=0?'+':''}${fmt(diff)}</div>
+    </div>`;
+  document.getElementById('metricsCard').style.display = 'block';
+
+  // ── AI 分析 ──
+  document.getElementById('aiCard').style.display = 'block';
+  document.getElementById('ai-output').innerHTML = '<span class="spinner"></span> AI 正在分析中，請稍候（10~30 秒）...';
+
+  const dataJson = JSON.stringify(df.slice(-90).map(r=>({
+    date:r.date, open:r.open, high:r.high, low:r.low,
+    close:r.close, volume:r.volume,
+    ma5:+r.ma5.toFixed(2), ma10:+r.ma10.toFixed(2),
+    ma20:+r.ma20.toFixed(2), ma60:+r.ma60.toFixed(2)
+  })));
+
+  const systemMsg = `你是一位專業的技術分析師，專精於股票技術分析和歷史數據解讀。
+重要原則：僅提供歷史數據分析和技術指標解讀，絕不提供任何投資建議或預測。保持完全客觀中立的分析態度。使用繁體中文回答。
+嚴格的表達方式：使用「歷史數據顯示」、「技術指標反映」、「過去走勢呈現」等客觀描述。避免「可能性」、「預期」、「建議」等暗示性用詞。強調「歷史表現不代表未來結果」。
+免責聲明：所提供的分析內容純粹基於歷史數據的技術解讀，僅供教育和研究參考，不構成任何投資建議。`;
+
+  const userMsg = `請基於以下股票歷史數據進行深度技術分析：
+
+### 基本資訊
+- 股票代號：${symbol}
+- 分析期間：${df[0].date} 至 ${df[df.length-1].date}
+- 期間價格變化：${pct.toFixed(2)}%（從 $${sp.toFixed(2)} 變化到 $${ep.toFixed(2)}）
+
+### 完整交易數據
+${dataJson}
+
+### 分析架構
+1. 趨勢分析（整體趨勢方向、關鍵支撐阻力位、趨勢強度）
+2. 技術指標分析（移動平均線分析、成交量關聯性）
+3. 價格行為分析（重要突破點、波動性評估、轉折點識別）
+4. 風險評估（當前價位風險等級、支撐阻力區間）
+5. 市場觀察（短期1-2週、中期1-3個月、關鍵價位觀察點）
+
+分析目標：${symbol}`;
+
+  try {
+    const aiRes = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+openaiKey },
+      body: JSON.stringify({
+        model: 'o4-mini',
+        messages: [
+          { role:'system', content:systemMsg },
+          { role:'user',   content:userMsg   }
+        ]
+      })
+    });
+    const aiData = await aiRes.json();
+    if(aiData.error){ throw new Error(aiData.error.message); }
+    document.getElementById('ai-output').textContent = aiData.choices[0].message.content;
+  } catch(e) {
+    document.getElementById('ai-output').innerHTML = '<div class="alert alert-error">❌ AI 分析錯誤：'+e.message+'</div>';
+  }
+
+  // ── 歷史數據表格（最近10筆，降序） ──
+  const recent = [...df].reverse().slice(0,10);
+  const thead = `<thead><tr>${['日期','開盤','最高','最低','收盤','成交量','MA5','MA10','MA20','MA60'].map(h=>`<th>${h}</th>`).join('')}</tr></thead>`;
+  const tbody = '<tbody>'+recent.map(r=>`<tr>
+    <td>${r.date}</td><td>${fmt(r.open)}</td><td>${fmt(r.high)}</td>
+    <td>${fmt(r.low)}</td><td>${fmt(r.close)}</td><td>${fmtVol(r.volume)}</td>
+    <td>${fmt(r.ma5)}</td><td>${fmt(r.ma10)}</td><td>${fmt(r.ma20)}</td><td>${fmt(r.ma60)}</td>
+  </tr>`).join('')+'</tbody>';
+  document.getElementById('dataTable').innerHTML = thead+tbody;
+  document.getElementById('tableCard').style.display = 'block';
+}
+</script>
+</body>
+</html>"""
+
+@app.route('/')
+def index():
+    return render_template_string(HTML)
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
